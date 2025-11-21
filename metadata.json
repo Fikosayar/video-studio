@@ -1,0 +1,7 @@
+{
+  "name": "Gemini Creator Studio",
+  "description": "An all-in-one AI creative studio powered by Google Gemini. Generate high-fidelity images, edit photos with text, create videos with Veo, and converse in real-time.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
