@@ -1,18 +1,14 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, VideoGenerationReferenceType } from "@google/genai";
 import { VideoGenerationConfig, ImageGenerationConfig, ImageEditConfig } from "../types";
 
-// Helper to manage API Key state for specific high-tier models
+// Helper to manage API Key state
 export const ensureApiKey = async (): Promise<string> => {
-  // Check if global env key is set (for basic features)
   if (process.env.API_KEY) return process.env.API_KEY;
   
-  // For advanced features (Veo, Pro Image), user selection is required
   const aistudio = (window as any).aistudio;
   if (aistudio && aistudio.hasSelectedApiKey) {
     const hasKey = await aistudio.hasSelectedApiKey();
     if (hasKey) {
-       // The key is injected automatically into fetch/client if selected via aistudio
-       // However, for the SDK we might need to trigger the selector if we don't have a process.env fallback
        return 'INJECTED_BY_AISTUDIO'; 
     }
   }
@@ -23,7 +19,14 @@ export const triggerKeySelection = async () => {
     const aistudio = (window as any).aistudio;
     if (aistudio && aistudio.openSelectKey) {
         await aistudio.openSelectKey();
-        // After selection, typically the page might reload or we re-init
+        return true;
+    }
+    // Fallback for dev environments without the overlay script
+    const manualKey = prompt("Please enter your Gemini API Key (Paid project required for Veo/Pro):");
+    if (manualKey) {
+        // This is a temporary hack for the requested flow if the overlay is missing
+        // In a real app, use a proper UI modal, but here we simulate the 'injection'
+        (window as any).GEMINI_API_KEY_OVERRIDE = manualKey;
         return true;
     }
     return false;
@@ -31,34 +34,59 @@ export const triggerKeySelection = async () => {
 
 // --- Veo Video Generation ---
 export const generateVideo = async (config: VideoGenerationConfig) => {
-  // Use the AI Studio key flow for Veo
-  if (!(window as any).aistudio) {
-      console.warn("AI Studio overlay not found, assuming process.env.API_KEY for dev");
+  const apiKey = (window as any).GEMINI_API_KEY_OVERRIDE || process.env.API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
+
+  const imageCount = config.images?.length || 0;
+  let operation: any;
+  let modelUsed = 'veo-3.1-fast-generate-preview';
+
+  // MULTI-IMAGE MODE (2-3 Images)
+  // Must use 'veo-3.1-generate-preview' (Base model)
+  // Must use 720p, 16:9
+  if (imageCount > 1) {
+     modelUsed = 'veo-3.1-generate-preview';
+     const referenceImagesPayload = config.images!.map(img => ({
+         image: {
+             imageBytes: img,
+             mimeType: 'image/png'
+         },
+         referenceType: VideoGenerationReferenceType.ASSET
+     }));
+
+     operation = await ai.models.generateVideos({
+         model: modelUsed,
+         prompt: config.prompt,
+         config: {
+             numberOfVideos: 1,
+             referenceImages: referenceImagesPayload,
+             resolution: '720p', // Enforced by model for multi-ref
+             aspectRatio: '16:9' // Enforced by model for multi-ref
+         }
+     });
+  } 
+  // SINGLE/NO IMAGE MODE
+  // Uses 'veo-3.1-fast-generate-preview'
+  else {
+     let payload: any = {
+        model: modelUsed,
+        prompt: config.prompt,
+        config: {
+          numberOfVideos: 1,
+          resolution: config.resolution,
+          aspectRatio: config.aspectRatio
+        }
+     };
+
+     if (imageCount === 1) {
+        payload.image = {
+          imageBytes: config.images![0],
+          mimeType: 'image/png'
+        };
+     }
+
+     operation = await ai.models.generateVideos(payload);
   }
-  
-  // We instantiate a new client. If using the window.aistudio flow, the key is handled internally 
-  // or we access it via process.env if the environment injects it after selection. 
-  // For this code, we assume standard env var or injected var.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-
-  let payload: any = {
-    model: 'veo-3.1-fast-generate-preview',
-    prompt: config.prompt,
-    config: {
-      numberOfVideos: 1,
-      resolution: '720p', // 720p is safe default for preview
-      aspectRatio: config.aspectRatio
-    }
-  };
-
-  if (config.image) {
-    payload.image = {
-      imageBytes: config.image,
-      mimeType: 'image/png' // Assuming PNG for simplicity of input
-    };
-  }
-
-  let operation = await ai.models.generateVideos(payload);
 
   // Polling loop
   while (!operation.done) {
@@ -74,7 +102,7 @@ export const generateVideo = async (config: VideoGenerationConfig) => {
   if (!videoUri) throw new Error("No video URI returned");
 
   // Fetch the actual binary
-  const fetchUrl = `${videoUri}&key=${process.env.API_KEY}`;
+  const fetchUrl = `${videoUri}&key=${apiKey}`;
   const res = await fetch(fetchUrl);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
@@ -83,7 +111,8 @@ export const generateVideo = async (config: VideoGenerationConfig) => {
 
 // --- Image Generation (Gemini 3 Pro Image) ---
 export const generateHighQualityImage = async (config: ImageGenerationConfig) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  const apiKey = (window as any).GEMINI_API_KEY_OVERRIDE || process.env.API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
   
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-image-preview',
@@ -93,7 +122,7 @@ export const generateHighQualityImage = async (config: ImageGenerationConfig) =>
     config: {
       imageConfig: {
         imageSize: config.size,
-        aspectRatio: '1:1'
+        aspectRatio: config.aspectRatio
       }
     }
   });
@@ -109,7 +138,8 @@ export const generateHighQualityImage = async (config: ImageGenerationConfig) =>
 
 // --- Image Editing (Gemini 2.5 Flash Image) ---
 export const editImage = async (config: ImageEditConfig) => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+  const apiKey = (window as any).GEMINI_API_KEY_OVERRIDE || process.env.API_KEY || '';
+  const ai = new GoogleGenAI({ apiKey });
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
@@ -126,7 +156,6 @@ export const editImage = async (config: ImageEditConfig) => {
     }
   });
 
-  // Flash Image usually returns the new image in inlineData
   for (const part of response.candidates?.[0]?.content?.parts || []) {
     if (part.inlineData) {
       return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
@@ -134,13 +163,3 @@ export const editImage = async (config: ImageEditConfig) => {
   }
   throw new Error("No edited image returned. The model might have refused the edit or returned text only.");
 };
-
-// --- General AI Helper ---
-export const analyzeText = async (prompt: string) => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
-    });
-    return response.text;
-}

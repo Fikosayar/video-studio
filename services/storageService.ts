@@ -1,8 +1,9 @@
-import { CreationHistoryItem } from '../types';
+import { CreationHistoryItem, Asset } from '../types';
 
 const DB_NAME = 'GeminiStudioDB';
-const DB_VERSION = 1;
-const STORE_NAME = 'creations';
+const DB_VERSION = 2; // Incremented for Assets store
+const STORE_HISTORY = 'creations';
+const STORE_ASSETS = 'assets';
 
 // Helper to open the database
 const openDB = (): Promise<IDBDatabase> => {
@@ -18,28 +19,36 @@ const openDB = (): Promise<IDBDatabase> => {
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-        // Index by userId to allow multi-user support on same device
+      
+      // History Store
+      if (!db.objectStoreNames.contains(STORE_HISTORY)) {
+        const store = db.createObjectStore(STORE_HISTORY, { keyPath: 'id' });
         store.createIndex('userId', 'userId', { unique: false });
         store.createIndex('createdAt', 'createdAt', { unique: false });
+      }
+
+      // Assets Store (For saved characters/reference images)
+      if (!db.objectStoreNames.contains(STORE_ASSETS)) {
+        const assetStore = db.createObjectStore(STORE_ASSETS, { keyPath: 'id' });
+        assetStore.createIndex('userId', 'userId', { unique: false });
       }
     };
   });
 };
 
+// --- History Methods ---
+
 export const getHistory = async (userId: string): Promise<CreationHistoryItem[]> => {
   try {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readonly');
-      const store = transaction.objectStore(STORE_NAME);
+      const transaction = db.transaction(STORE_HISTORY, 'readonly');
+      const store = transaction.objectStore(STORE_HISTORY);
       const index = store.index('userId');
       const request = index.getAll(userId);
 
       request.onsuccess = () => {
         const results = (request.result as (CreationHistoryItem & { userId: string })[]) || [];
-        // Sort by createdAt descending (newest first)
         results.sort((a, b) => b.createdAt - a.createdAt);
         resolve(results);
       };
@@ -47,7 +56,7 @@ export const getHistory = async (userId: string): Promise<CreationHistoryItem[]>
       request.onerror = () => reject(request.error);
     });
   } catch (e) {
-    console.error("Failed to load history from IndexedDB", e);
+    console.error("Failed to load history", e);
     return [];
   }
 };
@@ -55,43 +64,120 @@ export const getHistory = async (userId: string): Promise<CreationHistoryItem[]>
 export const saveToHistory = async (userId: string, item: CreationHistoryItem): Promise<CreationHistoryItem[]> => {
   try {
     const db = await openDB();
-    
-    // Augment item with userId for indexing
     const itemWithUser = { ...item, userId };
 
     await new Promise<void>((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
+      const transaction = db.transaction(STORE_HISTORY, 'readwrite');
+      const store = transaction.objectStore(STORE_HISTORY);
       const request = store.put(itemWithUser);
-
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
 
-    // Return updated history list
     return getHistory(userId);
   } catch (e) {
-    console.error("Failed to save to IndexedDB", e);
+    console.error("Failed to save to history", e);
     throw e;
   }
 };
 
-export const clearHistory = async (userId: string) => {
+export const updateHistoryItem = async (userId: string, itemId: string, updates: Partial<CreationHistoryItem>): Promise<CreationHistoryItem[]> => {
   try {
     const db = await openDB();
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
-    const store = transaction.objectStore(STORE_NAME);
-    const index = store.index('userId');
-    const request = index.openCursor(IDBKeyRange.only(userId));
+    
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(STORE_HISTORY, 'readwrite');
+      const store = transaction.objectStore(STORE_HISTORY);
+      
+      const getRequest = store.get(itemId);
+      
+      getRequest.onsuccess = () => {
+        const item = getRequest.result;
+        if (!item) {
+          reject(new Error("Item not found"));
+          return;
+        }
+        
+        const updatedItem = { ...item, ...updates };
+        const putRequest = store.put(updatedItem);
+        
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => reject(putRequest.error);
+      };
+      
+      getRequest.onerror = () => reject(getRequest.error);
+    });
 
-    request.onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest).result;
-      if (cursor) {
-        cursor.delete();
-        cursor.continue();
-      }
-    };
+    return getHistory(userId);
   } catch (e) {
-    console.error("Failed to clear history", e);
+    console.error("Failed to update item", e);
+    throw e;
   }
 };
+
+export const deleteFromHistory = async (userId: string, itemId: string): Promise<CreationHistoryItem[]> => {
+    try {
+        const db = await openDB();
+        await new Promise<void>((resolve, reject) => {
+            const transaction = db.transaction(STORE_HISTORY, 'readwrite');
+            const store = transaction.objectStore(STORE_HISTORY);
+            const request = store.delete(itemId);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+        return getHistory(userId);
+    } catch (e) {
+        console.error("Failed to delete item", e);
+        throw e;
+    }
+}
+
+// --- Asset Methods (Saved Characters) ---
+
+export const getAssets = async (userId: string): Promise<Asset[]> => {
+    try {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(STORE_ASSETS, 'readonly');
+            const store = transaction.objectStore(STORE_ASSETS);
+            const index = store.index('userId');
+            const request = index.getAll(userId);
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => reject(request.error);
+        });
+    } catch (e) {
+        return [];
+    }
+};
+
+export const saveAsset = async (userId: string, asset: Asset): Promise<Asset[]> => {
+    try {
+        const db = await openDB();
+        const assetWithUser = { ...asset, userId };
+        await new Promise<void>((resolve, reject) => {
+            const transaction = db.transaction(STORE_ASSETS, 'readwrite');
+            const store = transaction.objectStore(STORE_ASSETS);
+            const request = store.put(assetWithUser);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+        return getAssets(userId);
+    } catch (e) {
+        throw e;
+    }
+};
+
+export const deleteAsset = async (userId: string, assetId: string): Promise<Asset[]> => {
+    try {
+        const db = await openDB();
+        await new Promise<void>((resolve, reject) => {
+             const transaction = db.transaction(STORE_ASSETS, 'readwrite');
+             const store = transaction.objectStore(STORE_ASSETS);
+             store.delete(assetId);
+             transaction.oncomplete = () => resolve();
+        });
+        return getAssets(userId);
+    } catch (e) {
+        throw e;
+    }
+}

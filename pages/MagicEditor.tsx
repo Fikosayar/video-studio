@@ -49,6 +49,7 @@ const MagicEditor: React.FC<MagicEditorProps> = ({ onSave }) => {
         type: MediaType.IMAGE,
         url: editedDataUrl,
         prompt: `Edit: ${prompt}`,
+        tags: [],
         createdAt: Date.now()
       });
     } catch (e) {
