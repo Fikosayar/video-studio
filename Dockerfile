@@ -2,7 +2,7 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Paket dosyasını kopyala (Hata buradaydı, düzelttik)
+# Paket dosyasını kopyala
 COPY package.json ./
 
 # Paketleri yükle
@@ -24,7 +24,7 @@ FROM nginx:alpine
 # Varsayılan Nginx ayarını sil
 RUN rm /etc/nginx/conf.d/default.conf
 
-# Özel Nginx ayarını oluştur
+# En sade Nginx ayarını oluştur (Sorunlu header satırını kaldırdık)
 RUN echo 'server { \
     listen 80; \
     server_name _; \
@@ -32,7 +32,6 @@ RUN echo 'server { \
     index index.html; \
     location / { \
         try_files $uri $uri/ /index.html; \
-        add_header Content-Security-Policy "default-src * data: blob: \047unsafe-inline\047 \047unsafe-eval\047;"; \
     } \
 }' > /etc/nginx/conf.d/default.conf
 
