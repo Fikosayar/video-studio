@@ -1,9 +1,11 @@
 # 1. Aşama: Build
-FROM node:20-alpine as builder
+FROM node:20-alpine AS builder
 WORKDIR /app
 
+# Paket dosyasını kopyala (Hata buradaydı, düzelttik)
+COPY package.json ./
+
 # Paketleri yükle
-COPY package.json package-lock.json ./
 RUN npm install
 
 # Dosyaları kopyala
@@ -22,7 +24,7 @@ FROM nginx:alpine
 # Varsayılan Nginx ayarını sil
 RUN rm /etc/nginx/conf.d/default.conf
 
-# Özel Nginx ayarını oluştur (Beyaz ekran sorununu çözen kısım)
+# Özel Nginx ayarını oluştur
 RUN echo 'server { \
     listen 80; \
     server_name _; \
