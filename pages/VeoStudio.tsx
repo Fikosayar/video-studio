@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Upload, Film, Loader2, AlertCircle, UserPlus, Trash2, X, Tag as TagIcon, Images } from 'lucide-react';
-import { generateVideo, triggerKeySelection } from '../services/geminiService';
+import { Upload, Film, Loader2, AlertCircle, UserPlus, Trash2, X, Tag as TagIcon, Images, Sparkles, Check, RefreshCcw } from 'lucide-react';
+import { generateVideo, triggerKeySelection, enhancePrompt, mergeImages } from '../services/geminiService';
 import { CreationHistoryItem, MediaType, Asset } from '../types';
 import { getAssets, saveAsset, deleteAsset } from '../services/storageService';
 
@@ -21,6 +21,12 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
   const [selectedImages, setSelectedImages] = useState<string[]>([]); // Base64 strings
   const [error, setError] = useState<string | null>(null);
   
+  // Magic Features
+  const [isEnhancing, setIsEnhancing] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergedImage, setMergedImage] = useState<string | null>(null);
+  
   // Tags
   const [currentTag, setCurrentTag] = useState('');
   const [tags, setTags] = useState<string[]>([]);
@@ -38,13 +44,16 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
   }, [userId]);
 
   // Constraint Logic: Multi-Image requires 720p and 16:9
+  // Unless we have a Merged Master Frame!
   const isMultiImage = selectedImages.length > 1;
+  
   useEffect(() => {
-      if (isMultiImage) {
+      // Only force constraints if we are in raw multi-image mode
+      if (isMultiImage && !mergedImage) {
           setResolution('720p');
           setAspectRatio('16:9');
       }
-  }, [isMultiImage]);
+  }, [isMultiImage, mergedImage]);
 
   // Compute all unique tags from history for suggestions
   const suggestedTags = useMemo(() => {
@@ -56,24 +65,19 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
   }, [history]);
 
   const handleSmartTagClick = (tag: string) => {
-      // 1. Add tag to current list if not present
       if (!tags.includes(tag)) {
           setTags([...tags, tag]);
       }
-      
-      // 2. Find the most recent image with this tag in history
       const match = history.find(item => 
           item.type === MediaType.IMAGE && 
           item.tags?.some(t => t.toLowerCase() === tag.toLowerCase())
       );
-
       if (match) {
           const base64 = match.url.split(',')[1];
           if (!selectedImages.includes(base64)) {
               if (selectedImages.length < 3) {
                   setSelectedImages([...selectedImages, base64]);
               } else {
-                  // Optional: replace last or warn
                   alert("Maximum 3 reference images allowed.");
               }
           }
@@ -142,8 +146,65 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
       }
   }
 
+  const handleEnhancePrompt = async () => {
+      if (!prompt) return;
+      setIsEnhancing(true);
+      try {
+          if (window.aistudio && !await window.aistudio.hasSelectedApiKey()) {
+              await triggerKeySelection();
+          }
+          const improved = await enhancePrompt(prompt);
+          setPrompt(improved);
+      } catch (e) {
+          console.error(e);
+      } finally {
+          setIsEnhancing(false);
+      }
+  };
+
+  const startMergeProcess = async () => {
+      setIsMerging(true);
+      setError(null);
+      setShowMergeModal(true);
+      setMergedImage(null);
+      try {
+          if (window.aistudio && !await window.aistudio.hasSelectedApiKey()) {
+              await triggerKeySelection();
+          }
+          const merged = await mergeImages(selectedImages, prompt || "A cinematic composition");
+          setMergedImage(merged);
+      } catch (e: any) {
+          setError("Failed to merge images: " + e.message);
+          setShowMergeModal(false);
+      } finally {
+          setIsMerging(false);
+      }
+  };
+
+  const handleConfirmMerge = () => {
+      if (!mergedImage) return;
+      setShowMergeModal(false);
+      
+      // Proceed to generate video using the Merged Image as the SINGLE reference
+      const base64 = mergedImage.split(',')[1];
+      // Force 1080p/Fast model since we now have 1 perfect input image
+      executeVideoGeneration([base64], '1080p'); 
+  }
+
   const handleGenerate = async () => {
     if (!prompt && selectedImages.length === 0) return;
+    
+    // Intercept Multi-Image Request for Magic Merging
+    if (selectedImages.length > 1) {
+        startMergeProcess();
+        return;
+    }
+    
+    // Normal Flow
+    executeVideoGeneration(selectedImages, resolution);
+  };
+
+  const executeVideoGeneration = async (imgs: string[], resOverride?: '720p'|'1080p') => {
     setLoading(true);
     setError(null);
     setGeneratedVideo(null);
@@ -154,11 +215,13 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
          if (!selected) throw new Error("API Key required for Veo.");
       }
 
+      const resToUse = resOverride || resolution;
+
       const videoUrl = await generateVideo({
         prompt,
-        images: selectedImages,
+        images: imgs,
         aspectRatio,
-        resolution
+        resolution: resToUse
       });
 
       setGeneratedVideo(videoUrl);
@@ -171,9 +234,9 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
         tags: tags,
         createdAt: Date.now(),
         metadata: {
-            resolution,
+            resolution: resToUse,
             aspectRatio,
-            model: isMultiImage ? 'veo-3.1-generate-preview' : 'veo-3.1-fast-generate-preview'
+            model: imgs.length > 1 ? 'veo-3.1-generate-preview' : 'veo-3.1-fast-generate-preview'
         }
       });
 
@@ -200,7 +263,17 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
         <div className="bg-dark-800 p-6 rounded-2xl border border-white/5 space-y-6">
              {/* Prompt */}
              <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-300">Prompt</label>
+                <div className="flex justify-between items-end">
+                    <label className="block text-sm font-medium text-gray-300">Prompt</label>
+                    <button 
+                        onClick={handleEnhancePrompt}
+                        disabled={isEnhancing || !prompt}
+                        className="text-xs flex items-center gap-1 text-purple-400 hover:text-purple-300 disabled:opacity-50 transition-colors"
+                    >
+                        {isEnhancing ? <Loader2 size={12} className="animate-spin"/> : <Sparkles size={12} />}
+                        Magic Enhance
+                    </button>
+                </div>
                 <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -215,7 +288,7 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
                     <label className="block text-sm font-medium text-gray-300">
                         Reference Assets ({selectedImages.length}/3)
                     </label>
-                    {isMultiImage && <span className="text-xs text-purple-400">Multi-ref active: 720p/16:9 only</span>}
+                    {isMultiImage && !mergedImage && <span className="text-xs text-purple-400">Multi-ref: Merges to Master Frame</span>}
                 </div>
                 
                 {/* Selected Images Preview Row */}
@@ -327,7 +400,7 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
                 className="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold py-4 rounded-xl hover:shadow-lg hover:shadow-purple-900/20 hover:scale-[1.01] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
             >
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Film className="w-5 h-5" />}
-                Generate Video {isMultiImage ? '(Base Model)' : '(Fast Model)'}
+                {isMultiImage ? 'Merge & Animate (Cinema Grade)' : 'Generate Video'}
             </button>
         </div>
       </div>
@@ -341,21 +414,21 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
                   <div>
                       <div className="flex justify-between mb-2">
                           <label className="text-xs text-gray-500 uppercase tracking-wider font-bold block">Resolution</label>
-                          {isMultiImage && <span className="text-[10px] text-amber-500 flex items-center gap-1"><AlertCircle size={10}/> Locked</span>}
+                          {isMultiImage && !mergedImage && <span className="text-[10px] text-amber-500 flex items-center gap-1"><AlertCircle size={10}/> 720p during Merge</span>}
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                          <button disabled={isMultiImage} onClick={() => setResolution('720p')} className={`py-2 text-sm rounded-lg border transition-all disabled:opacity-50 ${resolution === '720p' ? 'bg-purple-600 border-purple-500 text-white' : 'border-gray-700 text-gray-400 hover:bg-white/5'}`}>720p</button>
-                          <button disabled={isMultiImage} onClick={() => setResolution('1080p')} className={`py-2 text-sm rounded-lg border transition-all disabled:opacity-50 ${resolution === '1080p' ? 'bg-purple-600 border-purple-500 text-white' : 'border-gray-700 text-gray-400 hover:bg-white/5'}`}>1080p</button>
+                          <button disabled={isMultiImage && !mergedImage} onClick={() => setResolution('720p')} className={`py-2 text-sm rounded-lg border transition-all disabled:opacity-50 ${resolution === '720p' ? 'bg-purple-600 border-purple-500 text-white' : 'border-gray-700 text-gray-400 hover:bg-white/5'}`}>720p</button>
+                          <button disabled={isMultiImage && !mergedImage} onClick={() => setResolution('1080p')} className={`py-2 text-sm rounded-lg border transition-all disabled:opacity-50 ${resolution === '1080p' ? 'bg-purple-600 border-purple-500 text-white' : 'border-gray-700 text-gray-400 hover:bg-white/5'}`}>1080p</button>
                       </div>
                   </div>
                   <div>
                       <div className="flex justify-between mb-2">
                            <label className="text-xs text-gray-500 uppercase tracking-wider font-bold block">Aspect Ratio</label>
-                           {isMultiImage && <span className="text-[10px] text-amber-500 flex items-center gap-1"><AlertCircle size={10}/> Locked</span>}
+                           {isMultiImage && !mergedImage && <span className="text-[10px] text-amber-500 flex items-center gap-1"><AlertCircle size={10}/> Locked</span>}
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                          <button disabled={isMultiImage} onClick={() => setAspectRatio('16:9')} className={`py-2 text-sm rounded-lg border transition-all disabled:opacity-50 ${aspectRatio === '16:9' ? 'bg-purple-600 border-purple-500 text-white' : 'border-gray-700 text-gray-400 hover:bg-white/5'}`}>16:9</button>
-                          <button disabled={isMultiImage} onClick={() => setAspectRatio('9:16')} className={`py-2 text-sm rounded-lg border transition-all disabled:opacity-50 ${aspectRatio === '9:16' ? 'bg-purple-600 border-purple-500 text-white' : 'border-gray-700 text-gray-400 hover:bg-white/5'}`}>9:16</button>
+                          <button disabled={isMultiImage && !mergedImage} onClick={() => setAspectRatio('16:9')} className={`py-2 text-sm rounded-lg border transition-all disabled:opacity-50 ${aspectRatio === '16:9' ? 'bg-purple-600 border-purple-500 text-white' : 'border-gray-700 text-gray-400 hover:bg-white/5'}`}>16:9</button>
+                          <button disabled={isMultiImage && !mergedImage} onClick={() => setAspectRatio('9:16')} className={`py-2 text-sm rounded-lg border transition-all disabled:opacity-50 ${aspectRatio === '9:16' ? 'bg-purple-600 border-purple-500 text-white' : 'border-gray-700 text-gray-400 hover:bg-white/5'}`}>9:16</button>
                       </div>
                   </div>
               </div>
@@ -414,6 +487,58 @@ const VeoStudio: React.FC<VeoStudioProps> = ({ onSave, userId, history }) => {
                   <div className="flex gap-2">
                       <button onClick={() => setShowAssetModal(false)} className="flex-1 py-2 rounded-lg bg-gray-700 hover:bg-gray-600">Cancel</button>
                       <button onClick={handleSaveAsset} disabled={!newAssetName || !newAssetImage} className="flex-1 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-50">Save</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* MERGE MASTER FRAME PREVIEW MODAL */}
+      {showMergeModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
+              <div className="bg-dark-900 border border-white/10 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl">
+                  <div className="p-6 border-b border-white/5 flex justify-between items-center">
+                      <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                          <Sparkles className="text-purple-400" /> Master Frame Preview
+                      </h3>
+                      {!isMerging && <button onClick={() => setShowMergeModal(false)}><X className="text-gray-400 hover:text-white"/></button>}
+                  </div>
+                  
+                  <div className="p-6 flex flex-col items-center justify-center min-h-[300px] bg-black/50">
+                      {isMerging ? (
+                          <div className="text-center space-y-4">
+                              <Loader2 className="w-12 h-12 text-purple-500 animate-spin mx-auto" />
+                              <p className="text-gray-300 font-medium">Merging concepts...</p>
+                              <p className="text-xs text-gray-500 max-w-md">Gemini is blending your reference images into a single cohesive master frame for optimal video quality.</p>
+                          </div>
+                      ) : mergedImage ? (
+                          <div className="relative w-full aspect-video rounded-lg overflow-hidden group border border-white/10">
+                              <img src={mergedImage} className="w-full h-full object-cover" />
+                              <div className="absolute bottom-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded">Preview</div>
+                          </div>
+                      ) : (
+                          <p className="text-red-400">Failed to generate preview.</p>
+                      )}
+                  </div>
+
+                  <div className="p-6 border-t border-white/5 flex justify-end gap-3">
+                      {isMerging ? (
+                          <span className="text-sm text-gray-500 py-2">Processing...</span>
+                      ) : (
+                          <>
+                             <button 
+                                 onClick={startMergeProcess}
+                                 className="px-4 py-2 rounded-lg border border-gray-600 text-gray-300 hover:bg-white/5 flex items-center gap-2"
+                             >
+                                 <RefreshCcw size={16} /> Regenerate
+                             </button>
+                             <button 
+                                 onClick={handleConfirmMerge}
+                                 className="px-6 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold hover:shadow-lg hover:shadow-purple-500/20 flex items-center gap-2"
+                             >
+                                 <Check size={16} /> Approve & Animate (1080p)
+                             </button>
+                          </>
+                      )}
                   </div>
               </div>
           </div>

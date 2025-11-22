@@ -4,11 +4,19 @@ export enum MediaType {
   AUDIO = 'AUDIO'
 }
 
+export enum AuthProvider {
+  GOOGLE = 'GOOGLE',
+  GITHUB = 'GITHUB',
+  APPLE = 'APPLE',
+  GUEST = 'GUEST'
+}
+
 export interface User {
   id: string;
   name: string;
   email: string;
   photoUrl: string;
+  provider: AuthProvider;
 }
 
 export interface Asset {
@@ -54,4 +62,11 @@ export interface ImageEditConfig {
   prompt: string;
   imageBase64: string;
   mimeType: string;
+}
+
+export class SecurityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SecurityError';
+  }
 }

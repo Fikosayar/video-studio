@@ -24,12 +24,61 @@ export const triggerKeySelection = async () => {
     // Fallback for dev environments without the overlay script
     const manualKey = prompt("Please enter your Gemini API Key (Paid project required for Veo/Pro):");
     if (manualKey) {
-        // This is a temporary hack for the requested flow if the overlay is missing
-        // In a real app, use a proper UI modal, but here we simulate the 'injection'
         (window as any).GEMINI_API_KEY_OVERRIDE = manualKey;
         return true;
     }
     return false;
+}
+
+// --- Prompt Enhancement ---
+export const enhancePrompt = async (originalPrompt: string): Promise<string> => {
+    const apiKey = (window as any).GEMINI_API_KEY_OVERRIDE || process.env.API_KEY || '';
+    const ai = new GoogleGenAI({ apiKey });
+    
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `Rewrite the following video prompt to be more cinematic, detailed, and optimized for AI video generation (Veo). Include details about lighting, camera angles, texture, and mood. Keep it under 100 words. Output ONLY the new prompt text, no explanations. Original Prompt: "${originalPrompt}"`
+    });
+    
+    return response.text?.trim() || originalPrompt;
+}
+
+// --- Image Merging (Master Frame) ---
+export const mergeImages = async (images: string[], prompt: string): Promise<string> => {
+    const apiKey = (window as any).GEMINI_API_KEY_OVERRIDE || process.env.API_KEY || '';
+    const ai = new GoogleGenAI({ apiKey });
+
+    const parts: any[] = images.map(img => ({
+        inlineData: {
+            data: img,
+            mimeType: 'image/png'
+        }
+    }));
+
+    parts.push({
+        text: `Create a high-quality, seamless master composition based on this description: "${prompt}".
+        Integrate the visual elements, characters, and styles from the provided reference images. 
+        The result should look like a single, cohesive cinematic frame ready for video animation.
+        High resolution, 16:9 aspect ratio.`
+    });
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-image-preview',
+        contents: { parts },
+        config: {
+            imageConfig: {
+                aspectRatio: '16:9',
+                imageSize: '2K'
+            }
+        }
+    });
+
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData) {
+            return `data:image/png;base64,${part.inlineData.data}`;
+        }
+    }
+    throw new Error("Failed to merge images.");
 }
 
 // --- Veo Video Generation ---

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import Navbar from './components/Navbar';
 import { User, CreationHistoryItem } from './types';
 import { getHistory, saveToHistory, deleteFromHistory, updateHistoryItem } from './services/storageService';
@@ -8,22 +8,14 @@ import VeoStudio from './pages/VeoStudio';
 import ImageStudio from './pages/ImageStudio';
 import MagicEditor from './pages/MagicEditor';
 import LiveConversation from './pages/LiveConversation';
+import AuthPortal from './components/AuthPortal';
 import { Film, Image as ImageIcon, Wand2, Mic, Grid } from 'lucide-react';
-
-// Mock User Data fallback
-const MOCK_USER: User = {
-  id: 'user_demo_123',
-  name: 'Demo User',
-  email: 'demo.user@gmail.com',
-  photoUrl: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Felix'
-};
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<'gallery' | 'veo' | 'image' | 'edit' | 'live'>('gallery');
   const [history, setHistory] = useState<CreationHistoryItem[]>([]);
   const [isInitializing, setIsInitializing] = useState(true);
-  const googleButtonRef = useRef<HTMLDivElement>(null);
 
   // Initialize App & Load Data
   useEffect(() => {
@@ -44,69 +36,7 @@ const App: React.FC = () => {
     init();
   }, []);
 
-  // Setup Google Sign-In Button
-  useEffect(() => {
-    if (!user && !isInitializing) {
-      const setupGoogleLogin = () => {
-          // Fix: Cast window to any to access google property
-          const google = (window as any).google;
-          if (google && google.accounts) {
-             google.accounts.id.initialize({
-                client_id: "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com", // Placeholder for user to fill
-                callback: handleGoogleCallback
-             });
-             
-             if (googleButtonRef.current) {
-                google.accounts.id.renderButton(
-                   googleButtonRef.current,
-                   { theme: "outline", size: "large", type: "standard", shape: "pill" }
-                );
-             }
-          }
-      };
-      // Retry if script hasn't loaded yet
-      const interval = setInterval(() => {
-          // Fix: Cast window to any to access google property
-          if ((window as any).google) {
-              setupGoogleLogin();
-              clearInterval(interval);
-          }
-      }, 500);
-      return () => clearInterval(interval);
-    }
-  }, [user, isInitializing]);
-
-  const handleGoogleCallback = async (response: any) => {
-      try {
-          // Decode JWT to get user info
-          const base64Url = response.credential.split('.')[1];
-          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-          const jsonPayload = decodeURIComponent(window.atob(base64).split('').map(function(c) {
-            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-          }).join(''));
-          
-          const payload = JSON.parse(jsonPayload);
-          
-          const newUser: User = {
-              id: payload.sub,
-              name: payload.name,
-              email: payload.email,
-              photoUrl: payload.picture
-          };
-
-          await completeLogin(newUser);
-      } catch (e) {
-          console.error("Google Login Error", e);
-          alert("Login failed. Falling back to demo.");
-          handleDemoLogin();
-      }
-  };
-
-  const handleDemoLogin = async () => {
-    await completeLogin(MOCK_USER);
-  };
-
-  const completeLogin = async (u: User) => {
+  const handleLogin = async (u: User) => {
     localStorage.setItem('gemini_studio_user', JSON.stringify(u));
     setUser(u);
     
@@ -160,43 +90,7 @@ const App: React.FC = () => {
   }
 
   if (!user) {
-    return (
-      <div className="min-h-screen bg-dark-900 text-white flex flex-col">
-        <Navbar user={null} onLogin={handleDemoLogin} onLogout={handleLogout} />
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-8 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-gray-800 to-dark-900">
-          <div className="relative group">
-            <div className="absolute -inset-4 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full blur-xl opacity-75 group-hover:opacity-100 transition-opacity animate-pulse-slow"></div>
-            <div className="relative bg-black p-6 rounded-full border border-white/10">
-               <img src="https://www.gstatic.com/lamda/images/gemini_sparkle_v002_d4735304ff6292a690345.svg" alt="Gemini" className="w-20 h-20" />
-            </div>
-          </div>
-          <h1 className="text-5xl md:text-7xl font-bold bg-clip-text text-transparent bg-gradient-to-b from-white via-white to-gray-500 tracking-tight">
-            Gemini Studio
-          </h1>
-          <p className="text-xl text-gray-400 max-w-2xl font-light">
-            The next generation creative suite. Video, Image, and Voice.
-            <br/>Powered by <span className="text-white font-medium">Gemini 2.5 & Veo</span>.
-          </p>
-          
-          <div className="flex flex-col gap-4 items-center w-full max-w-xs">
-              {/* Real Google Button Container */}
-              <div ref={googleButtonRef} className="h-12"></div>
-              
-              <div className="relative w-full text-center">
-                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-700"></div></div>
-                  <span className="relative bg-dark-900 px-2 text-xs text-gray-500 uppercase">Or continue as Guest</span>
-              </div>
-
-              <button 
-                onClick={handleDemoLogin}
-                className="w-full px-8 py-3 bg-gray-800 text-white rounded-full font-medium hover:bg-gray-700 transition-colors border border-gray-700"
-              >
-                Demo Login
-              </button>
-          </div>
-        </div>
-      </div>
-    );
+    return <AuthPortal onLogin={handleLogin} />;
   }
 
   return (
