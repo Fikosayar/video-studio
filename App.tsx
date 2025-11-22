@@ -1,8 +1,10 @@
+
 import React, { useState, useEffect } from 'react';
 import Navbar from './components/Navbar';
 import { User, CreationHistoryItem } from './types';
 import { getHistory, saveToHistory, deleteFromHistory, updateHistoryItem } from './services/storageService';
 import { triggerKeySelection } from './services/geminiService';
+import { triggerWebhook } from './services/webhookService';
 import HistoryGallery from './components/HistoryGallery';
 import VeoStudio from './pages/VeoStudio';
 import ImageStudio from './pages/ImageStudio';
@@ -62,6 +64,9 @@ const App: React.FC = () => {
     try {
       const updated = await saveToHistory(user.id, item);
       setHistory(updated);
+      
+      // Trigger Webhook Automation
+      triggerWebhook(item);
     } catch (e) {
       console.error("Failed to save item", e);
     }
@@ -126,7 +131,7 @@ const App: React.FC = () => {
              <div className="max-w-7xl mx-auto space-y-8 animate-in fade-in duration-500">
                <div className="flex items-center justify-between">
                   <h2 className="text-3xl font-bold">Asset Library</h2>
-                  <button className="text-sm text-gray-400 hover:text-white" onClick={() => handleSaveItem} >Refresh</button>
+                  <button className="text-sm text-gray-400 hover:text-white" onClick={() => { getHistory(user.id).then(setHistory); }} >Refresh</button>
                </div>
                <HistoryGallery items={history} onDeleteItem={handleDeleteItem} onUpdateItem={handleUpdateItem} />
              </div>

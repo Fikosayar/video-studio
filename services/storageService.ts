@@ -1,9 +1,11 @@
-import { CreationHistoryItem, Asset } from '../types';
+
+import { CreationHistoryItem, Asset, Album } from '../types';
 
 const DB_NAME = 'GeminiStudioDB';
-const DB_VERSION = 2; // Incremented for Assets store
+const DB_VERSION = 3; // Incremented for Albums store
 const STORE_HISTORY = 'creations';
 const STORE_ASSETS = 'assets';
+const STORE_ALBUMS = 'albums';
 
 // Helper to open the database
 const openDB = (): Promise<IDBDatabase> => {
@@ -25,12 +27,25 @@ const openDB = (): Promise<IDBDatabase> => {
         const store = db.createObjectStore(STORE_HISTORY, { keyPath: 'id' });
         store.createIndex('userId', 'userId', { unique: false });
         store.createIndex('createdAt', 'createdAt', { unique: false });
+        store.createIndex('albumId', 'albumId', { unique: false });
+      } else {
+        // Upgrade existing store if needed
+        const store = (event.target as IDBOpenDBRequest).transaction?.objectStore(STORE_HISTORY);
+        if (store && !store.indexNames.contains('albumId')) {
+             store.createIndex('albumId', 'albumId', { unique: false });
+        }
       }
 
       // Assets Store (For saved characters/reference images)
       if (!db.objectStoreNames.contains(STORE_ASSETS)) {
         const assetStore = db.createObjectStore(STORE_ASSETS, { keyPath: 'id' });
         assetStore.createIndex('userId', 'userId', { unique: false });
+      }
+
+      // Albums Store
+      if (!db.objectStoreNames.contains(STORE_ALBUMS)) {
+        const albumStore = db.createObjectStore(STORE_ALBUMS, { keyPath: 'id' });
+        albumStore.createIndex('userId', 'userId', { unique: false });
       }
     };
   });
@@ -181,3 +196,60 @@ export const deleteAsset = async (userId: string, assetId: string): Promise<Asse
         throw e;
     }
 }
+
+// --- Album Methods ---
+
+export const getAlbums = async (userId: string): Promise<Album[]> => {
+    try {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(STORE_ALBUMS, 'readonly');
+            const store = transaction.objectStore(STORE_ALBUMS);
+            const index = store.index('userId');
+            const request = index.getAll(userId);
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => reject(request.error);
+        });
+    } catch (e) {
+        return [];
+    }
+};
+
+export const createAlbum = async (userId: string, name: string): Promise<Album[]> => {
+    const album: Album = {
+        id: crypto.randomUUID(),
+        userId,
+        name,
+        createdAt: Date.now()
+    };
+    
+    try {
+        const db = await openDB();
+        await new Promise<void>((resolve, reject) => {
+            const transaction = db.transaction(STORE_ALBUMS, 'readwrite');
+            const store = transaction.objectStore(STORE_ALBUMS);
+            store.put(album);
+            transaction.oncomplete = () => resolve();
+        });
+        return getAlbums(userId);
+    } catch (e) {
+        throw e;
+    }
+};
+
+export const deleteAlbum = async (userId: string, albumId: string): Promise<Album[]> => {
+    try {
+        const db = await openDB();
+        await new Promise<void>((resolve, reject) => {
+             const transaction = db.transaction(STORE_ALBUMS, 'readwrite');
+             const store = transaction.objectStore(STORE_ALBUMS);
+             store.delete(albumId);
+             transaction.oncomplete = () => resolve();
+        });
+        // Also decouple items from this album (optional, but cleaner)
+        // For simplicity we leave items with a stale albumId or could handle it here
+        return getAlbums(userId);
+    } catch (e) {
+        throw e;
+    }
+};

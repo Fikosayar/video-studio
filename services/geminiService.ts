@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, VideoGenerationReferenceType } from "@google/genai";
 import { VideoGenerationConfig, ImageGenerationConfig, ImageEditConfig } from "../types";
 
@@ -43,7 +44,7 @@ export const enhancePrompt = async (originalPrompt: string): Promise<string> => 
     return response.text?.trim() || originalPrompt;
 }
 
-// --- Image Merging (Master Frame) ---
+// --- Image Merging (Master Frame & Composition) ---
 export const mergeImages = async (images: string[], prompt: string): Promise<string> => {
     const apiKey = (window as any).GEMINI_API_KEY_OVERRIDE || process.env.API_KEY || '';
     const ai = new GoogleGenAI({ apiKey });
@@ -55,19 +56,50 @@ export const mergeImages = async (images: string[], prompt: string): Promise<str
         }
     }));
 
-    parts.push({
-        text: `Create a high-quality, seamless master composition based on this description: "${prompt}".
-        Integrate the visual elements, characters, and styles from the provided reference images. 
-        The result should look like a single, cohesive cinematic frame ready for video animation.
-        High resolution, 16:9 aspect ratio.`
-    });
+    let compositionPrompt = "";
+    
+    // Specialized prompt logic
+    if (images.length === 2 && prompt.toLowerCase().includes('subject') && prompt.toLowerCase().includes('background')) {
+        // Veo Studio Case: Subject + Location
+        compositionPrompt = `Perform a high-fidelity image composition.
+        
+        INPUTS:
+        - Image 1: The SUBJECT (Character/Person).
+        - Image 2: The BACKGROUND (Location/Scene).
+        
+        INSTRUCTIONS:
+        1. Place the SUBJECT from Image 1 into the BACKGROUND from Image 2.
+        2. IDENTITY PRESERVATION IS CRITICAL. The face, hair, and body features of the subject in the final image MUST be identical to Image 1.
+        3. Adjust lighting and shadows on the subject to match the environment of Image 2 seamlessly.
+        4. Maintain the perspective and depth of Image 2.
+        5. The final output must look like a single, unedited photograph or cinematic frame.
+        
+        Context/Action: ${prompt}
+        
+        Output: A single high-resolution image.`;
+    } else {
+        // Image Studio Case / General Blending
+        compositionPrompt = `Create a high-quality, seamless master composition based on these reference images and description.
+        
+        USER PROMPT: "${prompt || 'Combine these images artistically.'}"
+        
+        INSTRUCTIONS:
+        1. Analyze the visual style, subjects, and elements of all input images.
+        2. Blend them creatively according to the user prompt.
+        3. If no specific instruction is given, create a balanced composition integrating key elements from all images.
+        4. Ensure consistent lighting, style, and high aesthetic quality.
+        
+        Output: A single high-resolution image.`;
+    }
+
+    parts.push({ text: compositionPrompt });
 
     const response = await ai.models.generateContent({
         model: 'gemini-3-pro-image-preview',
         contents: { parts },
         config: {
             imageConfig: {
-                aspectRatio: '16:9',
+                aspectRatio: '16:9', // Default to cinematic, can be cropped later if needed
                 imageSize: '2K'
             }
         }
@@ -90,9 +122,14 @@ export const generateVideo = async (config: VideoGenerationConfig) => {
   let operation: any;
   let modelUsed = 'veo-3.1-fast-generate-preview';
 
-  // MULTI-IMAGE MODE (2-3 Images)
-  // Must use 'veo-3.1-generate-preview' (Base model)
-  // Must use 720p, 16:9
+  // Default prompt if empty (Pure Image-to-Video)
+  const safePrompt = config.prompt || "Cinematic movement, high quality, 4k";
+
+  // If we have a single image (which might be a pre-merged Master Frame), we respect the requested resolution
+  // Note: 1080p is only supported by the 'fast' model with 0 or 1 image input.
+  // The 'base' model (veo-3.1-generate-preview) supports multi-image inputs but is locked to 720p.
+  
+  // MULTI-IMAGE MODE (Raw 2-3 Images passed directly to Veo)
   if (imageCount > 1) {
      modelUsed = 'veo-3.1-generate-preview';
      const referenceImagesPayload = config.images!.map(img => ({
@@ -105,7 +142,7 @@ export const generateVideo = async (config: VideoGenerationConfig) => {
 
      operation = await ai.models.generateVideos({
          model: modelUsed,
-         prompt: config.prompt,
+         prompt: safePrompt,
          config: {
              numberOfVideos: 1,
              referenceImages: referenceImagesPayload,
@@ -114,16 +151,16 @@ export const generateVideo = async (config: VideoGenerationConfig) => {
          }
      });
   } 
-  // SINGLE/NO IMAGE MODE
-  // Uses 'veo-3.1-fast-generate-preview'
+  // SINGLE/NO IMAGE MODE (Master Frame or Text-to-Video)
   else {
+     // We can use Fast model for 1080p support if we have <= 1 image
      let payload: any = {
         model: modelUsed,
-        prompt: config.prompt,
+        prompt: safePrompt,
         config: {
           numberOfVideos: 1,
-          resolution: config.resolution,
-          aspectRatio: config.aspectRatio
+          resolution: config.resolution || '1080p', // Use requested resolution
+          aspectRatio: config.aspectRatio || '16:9' // Use requested aspect ratio
         }
      };
 

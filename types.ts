@@ -1,3 +1,4 @@
+
 export enum MediaType {
   IMAGE = 'IMAGE',
   VIDEO = 'VIDEO',
@@ -27,13 +28,22 @@ export interface Asset {
   createdAt: number;
 }
 
+export interface Album {
+  id: string;
+  userId: string;
+  name: string;
+  createdAt: number;
+}
+
 export interface CreationHistoryItem {
   id: string;
+  userId?: string; // Optional userId
   type: MediaType;
   url: string;
   thumbnailUrl?: string; // For videos
   prompt: string;
   tags: string[]; // New: Tags for organization
+  albumId?: string; // Linked album
   createdAt: number;
   metadata?: {
     width?: number;
@@ -62,6 +72,11 @@ export interface ImageEditConfig {
   prompt: string;
   imageBase64: string;
   mimeType: string;
+}
+
+export interface WebhookConfig {
+  url: string;
+  enabled: boolean;
 }
 
 export class SecurityError extends Error {
